@@ -3,4 +3,4 @@ project(SPM_Divide_and_Conquer)
 
 set(CMAKE_CXX_STANDARD 14)
 
-add_executable(SPM_Divide_and_Conquer main.cpp)
+add_executable(SPM_Divide_and_Conquer main.cpp include/divideandconquer.h)
