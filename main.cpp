@@ -37,7 +37,7 @@ int main() {
 
     bounds_type problem = {array.begin(), array.end()};
     DivideAndConquer<bounds_type, bounds_type> divideAndConquer(is_base, divide, conquer, combine);
-    divideAndConquer.solve(problem);
+    divideAndConquer.solve(problem).wait();
     assert(std::is_sorted(array.begin(), array.end()));
 
     std::cout << "Hello, World!" << std::endl;
