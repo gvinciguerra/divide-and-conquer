@@ -22,13 +22,16 @@ class WorkStealingPool {
         std::mutex mutex;
         std::condition_variable cond;
         std::thread thread;
+        WorkStealingPool &pool;
 
-        explicit Worker(WorkStealingPool &pool);
+        explicit Worker(WorkStealingPool &);
 
         Worker(const Worker &) = default;
 
+        void start();
+
         template<class F, class... Args>
-        std::future<typename std::result_of<F(Args...)>::type> submit(F &&f, Args &&... args);
+        std::future<typename std::result_of<F(Args...)>::type> submit(F &&, Args &&...);
     };
 
 public:
@@ -63,11 +66,15 @@ std::future<typename std::result_of<F(Args...)>::type> WorkStealingPool::Worker:
     return task->get_future();
 }
 
-WorkStealingPool::Worker::Worker(WorkStealingPool &pool) {
-    thread = std::thread([this, &pool]() -> void {
+WorkStealingPool::Worker::Worker(WorkStealingPool &pool) : pool(pool) {
+
+}
+
+void WorkStealingPool::Worker::start() {
+    thread = std::thread([this]() -> void {
         while (true) {
             std::unique_lock<std::mutex> lock(this->mutex);
-            this->cond.wait_for(lock, 100ms, [this, &pool] { return pool.shutdown || this->queue.empty(); });
+            this->cond.wait_for(lock, 100ms, [this] { return pool.shutdown || this->queue.empty(); });
             if (pool.shutdown && this->queue.empty())
                 return;
             if (this->queue.empty()) {
@@ -107,10 +114,11 @@ std::function<void()> WorkStealingPool::steal() {
 
 WorkStealingPool::WorkStealingPool(size_t pool_size) : pool_size(pool_size), shutdown() {
     for (int i = 0; i < pool_size; ++i) {
-        auto worker = std::make_shared<Worker>(*this);
-        workers.push_back(worker);
-        workers_map.emplace(worker->thread.get_id(), worker);
+        workers.emplace_back(std::make_shared<Worker>(*this));
+        workers_map.emplace(workers.back()->thread.get_id(), workers.back());
     }
+    for (auto w : workers)
+        w->start();
 }
 
 WorkStealingPool::~WorkStealingPool() {
