@@ -2,13 +2,11 @@
 #include <vector>
 #include <random>
 #include "include/divideandconquer.h"
+#include <benchmark/benchmark.h>
 
-int main() {
-    std::vector<int> array(100000);
-    std::uniform_int_distribution<int> dist(0, array.size() * 2);
-    std::srand(0);
-    std::generate(array.begin(), array.end(), std::rand);
+std::vector<int> array(10000000);
 
+void BM_merge_sort(benchmark::State &state) {
     using bounds_type = std::pair<std::vector<int>::iterator, std::vector<int>::iterator>;
     using dc_type = DivideAndConquer<bounds_type, bounds_type>;
 
@@ -35,11 +33,25 @@ int main() {
         return std::make_pair(solutions[0].first, solutions[1].second);
     };
 
-    bounds_type problem = {array.begin(), array.end()};
-    DivideAndConquer<bounds_type, bounds_type> divideAndConquer(is_base, divide, conquer, combine);
-    divideAndConquer.solve(problem).wait();
-    assert(std::is_sorted(array.begin(), array.end()));
+    unsigned int par_degree = state.range(0);
 
-    std::cout << "Hello, World!" << std::endl;
+    std::vector<int> copy = array;
+    bounds_type problem = {copy.begin(), copy.end()};
+    DivideAndConquer<bounds_type, bounds_type> divideAndConquer(is_base, divide, conquer, combine, par_degree);
+
+    for (auto _ : state) {
+        divideAndConquer.solve(problem).wait();
+        // assert(std::is_sorted(array.begin(), array.end()));
+    }
+}
+
+int main(int argc, char **argv) {
+    std::uniform_int_distribution<int> dist(0, array.size() * 2);
+    std::srand(0); // reproducibility
+    std::generate(array.begin(), array.end(), std::rand);
+
+    BENCHMARK(BM_merge_sort)->DenseRange(1, std::thread::hardware_concurrency(), 1)->Iterations(50);
+    benchmark::Initialize(&argc, argv);
+    benchmark::RunSpecifiedBenchmarks();
     return 0;
 }
