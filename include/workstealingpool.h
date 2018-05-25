@@ -74,7 +74,7 @@ void WorkStealingPool::Worker::start() {
     thread = std::thread([this]() -> void {
         while (true) {
             std::unique_lock<std::mutex> lock(this->mutex);
-            this->cond.wait_for(lock, 100ms, [this] { return pool.shutdown || this->queue.empty(); });
+            this->cond.wait_for(lock, 10ns, [this] { return pool.shutdown || this->queue.empty(); });
             if (pool.shutdown && this->queue.empty())
                 return;
             if (this->queue.empty()) {
@@ -95,13 +95,15 @@ void WorkStealingPool::Worker::start() {
 template<class F, class... Args>
 std::future<typename std::result_of<F(Args...)>::type>
 WorkStealingPool::submit(std::thread::id thread_id, F &&f, Args &&... args) {
-    if (workers_map.find(thread_id) == workers_map.end())
-        return workers[std::rand() % workers.size()]->submit(f, args...);
+    if (workers_map.find(thread_id) == workers_map.end()) {
+        auto r = std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
+        return workers[r]->submit(f, args...);
+    }
     return workers_map[thread_id]->submit(f, args...);
 }
 
 std::function<void()> WorkStealingPool::steal() {
-    auto r = std::rand() / ((RAND_MAX + 1u) / workers.size());
+    auto r = std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
     auto victim = workers[r];
     std::unique_lock<std::mutex> lock(victim->mutex, std::try_to_lock);
     if (lock.owns_lock() && !victim->queue.empty()) {
