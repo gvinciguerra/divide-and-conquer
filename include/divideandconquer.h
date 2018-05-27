@@ -25,7 +25,7 @@ private:
     const conquer_fun_type &conquer;
     const combine_fun_type &combine;
     const size_t parallelism_degree;
-    SimplePool pool;
+    WorkStealingPool pool;
 
 public:
     DivideAndConquer(is_base_fun_type &is_base_fun,

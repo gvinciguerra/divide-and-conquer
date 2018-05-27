@@ -38,15 +38,16 @@ public:
     explicit WorkStealingPool(size_t pool_size);
 
     template<class F, class... Args>
-    std::future<typename std::result_of<F(Args...)>::type> submit(std::thread::id thread_id, F &&f, Args &&... args);
+    std::future<typename std::result_of<F(Args...)>::type> submit(F &&, Args &&...);
 
     std::function<void()> steal();
 
     ~WorkStealingPool();
 
 private:
-    std::atomic_bool shutdown;
     size_t pool_size;
+    std::atomic_int remaining;
+    std::atomic_bool shutdown;
     std::vector<std::shared_ptr<Worker>> workers; // O(1) random worker selection in steal()
     std::unordered_map<std::thread::id, std::shared_ptr<Worker>> workers_map; // O(1) access in submit()
 };
@@ -59,7 +60,8 @@ std::future<typename std::result_of<F(Args...)>::type> WorkStealingPool::Worker:
     );
 
     std::unique_lock<std::mutex> lock(mutex);
-    queue.emplace_back([task]() { (*task)(); });
+    queue.emplace_front([task]() { (*task)(); });
+    pool.remaining++;
     lock.unlock();
     cond.notify_all();
 
@@ -73,19 +75,22 @@ WorkStealingPool::Worker::Worker(WorkStealingPool &pool) : pool(pool) {
 void WorkStealingPool::Worker::start() {
     thread = std::thread([this]() -> void {
         while (true) {
-            std::unique_lock<std::mutex> lock(this->mutex);
-            this->cond.wait_for(lock, 10ns, [this] { return pool.shutdown || this->queue.empty(); });
-            if (pool.shutdown && this->queue.empty())
+            std::unique_lock<std::mutex> lock(mutex);
+            cond.wait(lock, [this] { return pool.shutdown || !queue.empty() || pool.remaining >= 0; });
+            if (pool.shutdown && queue.empty())
                 return;
-            if (this->queue.empty()) {
+            if (queue.empty()) {
                 lock.unlock();
-                auto task = std::move(pool.steal());
-                if (task != nullptr)
-                    task();
+                auto stolen_task = std::move(pool.steal());
+                if (stolen_task != nullptr) {
+                    pool.remaining--;
+                    stolen_task();
+                }
             } else {
-                auto task = std::move(this->queue.back());
-                this->queue.pop_back();
+                auto task = std::move(queue.back());
+                queue.pop_back();
                 lock.unlock();
+                pool.remaining--;
                 task();
             }
         }
@@ -94,7 +99,8 @@ void WorkStealingPool::Worker::start() {
 
 template<class F, class... Args>
 std::future<typename std::result_of<F(Args...)>::type>
-WorkStealingPool::submit(std::thread::id thread_id, F &&f, Args &&... args) {
+WorkStealingPool::submit(F &&f, Args &&... args) {
+    auto thread_id = std::this_thread::get_id();
     if (workers_map.find(thread_id) == workers_map.end()) {
         auto r = std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
         return workers[r]->submit(f, args...);
@@ -103,7 +109,7 @@ WorkStealingPool::submit(std::thread::id thread_id, F &&f, Args &&... args) {
 }
 
 std::function<void()> WorkStealingPool::steal() {
-    auto r = std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
+    auto r = workers.size() == 1 ? 0 : std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
     auto victim = workers[r];
     std::unique_lock<std::mutex> lock(victim->mutex, std::try_to_lock);
     if (lock.owns_lock() && !victim->queue.empty()) {
@@ -114,12 +120,14 @@ std::function<void()> WorkStealingPool::steal() {
     return nullptr;
 }
 
-WorkStealingPool::WorkStealingPool(size_t pool_size) : pool_size(pool_size), shutdown() {
+WorkStealingPool::WorkStealingPool(size_t pool_size) : pool_size(pool_size), shutdown(false), remaining(0) {
+    if (pool_size < 1)
+        throw std::invalid_argument("pool_size < 1");
     for (int i = 0; i < pool_size; ++i) {
         workers.emplace_back(std::make_shared<Worker>(*this));
         workers_map.emplace(workers.back()->thread.get_id(), workers.back());
     }
-    for (auto w : workers)
+    for (auto &w : workers)
         w->start();
 }
 
