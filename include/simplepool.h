@@ -47,7 +47,7 @@ SimplePool::SimplePool(size_t pool_size) : shutdown(false) {
         workers.emplace_back(std::thread([this]() -> void {
             while (true) {
                 std::unique_lock<std::mutex> lock(mutex);
-                cond.wait(lock, [this] { return shutdown || queue.empty(); });
+                cond.wait(lock, [this] { return shutdown || !queue.empty(); });
                 if (shutdown && queue.empty())
                     return;
 
