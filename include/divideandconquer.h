@@ -61,10 +61,10 @@ public:
         std::vector<TypeIn> subproblems = divide(problem);
         std::vector<std::future<TypeOut>> futures;
         size_t child_workers = remaining_workers / subproblems.size();
-        for (auto &p : subproblems)
-            futures.emplace_back(pool.submit(&DivideAndConquer::solve_helper, this, p, child_workers));
+        for (auto it = subproblems.begin() + 1; it != subproblems.end(); ++it)
+            futures.emplace_back(pool.submit(&DivideAndConquer::solve_helper, this, *it, child_workers));
 
-        std::vector<TypeOut> solutions;
+        std::vector<TypeOut> solutions = {solve_helper(subproblems[0], child_workers)};
         for (auto &f : futures)
             solutions.emplace_back(f.get());
 
