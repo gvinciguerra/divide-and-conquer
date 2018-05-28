@@ -1,3 +1,6 @@
 [submodule "lib/benchmark"]
 	path = lib/benchmark
 	url = https://github.com/google/benchmark.git
+[submodule "lib/fastflow"]
+	path = lib/fastflow
+	url = https://github.com/fastflow/fastflow.git
