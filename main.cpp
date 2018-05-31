@@ -4,10 +4,13 @@
 #include "include/divideandconquer.h"
 #include <benchmark/benchmark.h>
 
-#define data 1000
-std::vector<int> array(data * data);
-std::vector<std::vector<int>> matrix_a(data, std::vector<int>(data));
-std::vector<std::vector<int>> matrix_b(data, std::vector<int>(data));
+#define DATA_SQRT 100 // 1000^2 elements
+#define CUTOFF_SQRT 32 // 32^2 elements to stop the recursive splitting
+
+using matrix_type = std::vector<std::vector<int>>;
+std::vector<int> array(DATA_SQRT * DATA_SQRT);
+matrix_type matrix_a(DATA_SQRT, std::vector<int>(DATA_SQRT));
+matrix_type matrix_b(DATA_SQRT, std::vector<int>(DATA_SQRT));
 
 void BM_merge_sort(benchmark::State &state);
 
@@ -35,7 +38,7 @@ void BM_merge_sort(benchmark::State &state) {
     using dc_type = DivideAndConquer<bounds_type, bounds_type>;
 
     dc_type::is_base_fun_type is_base = [](bounds_type &problem) -> bool {
-        return std::distance(problem.first, problem.second) < 64;
+        return std::distance(problem.first, problem.second) < CUTOFF_SQRT * CUTOFF_SQRT;
     };
 
     dc_type::divide_fun_type divide = [](bounds_type &problem) -> std::vector<bounds_type> {
@@ -75,45 +78,72 @@ void BM_merge_sort(benchmark::State &state) {
     }
 }
 
+void sum_square_matrices(matrix_type &c, size_t base_r, size_t base_c, matrix_type &a, matrix_type &b) {
+    assert(a.size() == b.size() && b.size() * 2 == c.size());
+    for (size_t i = 0; i < a.size(); ++i)
+        for (size_t j = 0; j < a.size(); ++j)
+            c[i + base_r][j + base_c] = a[i][j] + b[i][j];
+}
+
 void BM_matrix_multiply(benchmark::State &state) {
-    using submatrix_type = struct {
+    using slice_type = struct {
         size_t ra, rb, ca, cb;
     };
-    using dc_type = DivideAndConquer<submatrix_type, submatrix_type>;
+    using pair_of_slice = std::pair<slice_type, slice_type>;
+    using dc_type = DivideAndConquer<pair_of_slice, std::shared_ptr<matrix_type>>;
 
-    std::vector<std::vector<int>> result(data, std::vector<int>(data));
+    std::vector<std::vector<int>> result(DATA_SQRT, std::vector<int>(DATA_SQRT));
 
-    dc_type::is_base_fun_type is_base = [](submatrix_type &p) -> bool {
-        return p.rb - p.ra < 64;
+    dc_type::is_base_fun_type is_base = [](pair_of_slice &p) -> bool {
+        return p.first.rb - p.first.ra < CUTOFF_SQRT;
     };
 
-    dc_type::divide_fun_type divide = [](submatrix_type &p) -> std::vector<submatrix_type> {
-        std::vector<submatrix_type> subproblems;
+    dc_type::divide_fun_type divide = [](pair_of_slice &problem) {
+        std::vector<pair_of_slice> subproblems;
+        auto p = problem.first;
         auto half = (p.rb - p.ra) / 2;
-        subproblems.push_back(submatrix_type{p.ra, p.ra + half, p.ca, p.ca + half});
-        subproblems.push_back(submatrix_type{p.ra, p.ra + half, p.ca + half, p.cb});
-        subproblems.push_back(submatrix_type{p.ra + half, p.rb, p.ca, p.ca + half});
-        subproblems.push_back(submatrix_type{p.ra + half, p.rb, p.ca + half, p.cb});
+        auto i11 = slice_type{p.ra, p.ra + half, p.ca, p.ca + half};
+        auto i12 = slice_type{p.ra, p.ra + half, p.ca + half, p.cb};
+        auto i21 = slice_type{p.ra + half, p.rb, p.ca, p.ca + half};
+        auto i22 = slice_type{p.ra + half, p.rb, p.ca + half, p.cb};
+        subproblems.emplace_back(i11, i11);
+        subproblems.emplace_back(i12, i21);
+        subproblems.emplace_back(i11, i12);
+        subproblems.emplace_back(i12, i22);
+        subproblems.emplace_back(i21, i11);
+        subproblems.emplace_back(i22, i21);
+        subproblems.emplace_back(i21, i12);
+        subproblems.emplace_back(i22, i22);
         return subproblems;
     };
 
-    dc_type::conquer_fun_type conquer = [&result](submatrix_type &p) -> submatrix_type {
-        for (size_t i = p.ra; i < p.rb; ++i)
-            for (size_t j = p.ca; j < p.cb; ++j)
-                for (size_t k = p.ra; k < p.rb; ++k)
-                    result[i][j] += matrix_a[i][k] * matrix_b[k][j];
-        return p;
+    dc_type::conquer_fun_type conquer = [&result](pair_of_slice &p) {
+        size_t n = p.first.rb - p.first.ra;
+        auto c = std::make_shared<std::vector<std::vector<int>>>(n, std::vector<int>(n));
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j)
+                for (size_t k = 0; k < n; ++k)
+                    (*c)[i][j] += matrix_a[p.first.ra + i][p.first.ca + k] * matrix_b[p.second.ra + k][p.second.ca + j];
+        return c;
     };
 
-    dc_type::combine_fun_type combine = [](std::vector<submatrix_type> &solutions) -> submatrix_type {
-        return solutions[0];
+    dc_type::combine_fun_type combine = [](std::vector<std::shared_ptr<matrix_type>> &solutions) {
+        assert(solutions.size() == 8);
+        size_t n = solutions[0]->size();
+        auto c = std::make_shared<std::vector<std::vector<int>>>(n * 2, std::vector<int>(n * 2));
+        sum_square_matrices(*c, 0, 0, *(solutions[0]), *(solutions[1]));     // C11
+        sum_square_matrices(*c, 0, n - 1, *(solutions[2]), *(solutions[3]));   // C12
+        sum_square_matrices(*c, n - 1, 0, *(solutions[4]), *(solutions[5]));   // C21
+        sum_square_matrices(*c, n - 1, n - 1, *(solutions[6]), *(solutions[7])); // C22
+        return c;
     };
 
     unsigned int par_degree = state.range(0);
 
     std::vector<int> copy = array;
-    submatrix_type problem = {0, result.size(), 0, result[0].size()};
-    DivideAndConquer<submatrix_type, submatrix_type> divideAndConquer(is_base, divide, conquer, combine, par_degree);
+    slice_type p = {0, result.size(), 0, result[0].size()};
+    pair_of_slice problem = std::make_pair(p, p);
+    dc_type divideAndConquer(is_base, divide, conquer, combine, par_degree);
 
     using namespace std::chrono;
 
