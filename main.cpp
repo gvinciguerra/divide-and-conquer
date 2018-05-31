@@ -4,8 +4,8 @@
 #include "include/divideandconquer.h"
 #include <benchmark/benchmark.h>
 
-#define DATA_SQRT 100 // 1000^2 elements
-#define CUTOFF_SQRT 32 // 32^2 elements to stop the recursive splitting
+#define DATA_SQRT 1024 // 1024^2 elements, must be a power of two
+#define CUTOFF_SQRT 16 // 32^2 elements to stop the recursive splitting
 
 using matrix_type = std::vector<std::vector<int>>;
 std::vector<int> array(DATA_SQRT * DATA_SQRT);
@@ -86,6 +86,9 @@ void sum_square_matrices(matrix_type &c, size_t base_r, size_t base_c, matrix_ty
 }
 
 void BM_matrix_multiply(benchmark::State &state) {
+    auto n = matrix_a.size();
+    assert(n == (n & (n - 1)) == 0); // n must be a power of two, because the algorithm doesn't do row/col padding
+
     using slice_type = struct {
         size_t ra, rb, ca, cb;
     };
@@ -101,11 +104,12 @@ void BM_matrix_multiply(benchmark::State &state) {
     dc_type::divide_fun_type divide = [](pair_of_slice &problem) {
         std::vector<pair_of_slice> subproblems;
         auto p = problem.first;
-        auto half = (p.rb - p.ra) / 2;
-        auto i11 = slice_type{p.ra, p.ra + half, p.ca, p.ca + half};
-        auto i12 = slice_type{p.ra, p.ra + half, p.ca + half, p.cb};
-        auto i21 = slice_type{p.ra + half, p.rb, p.ca, p.ca + half};
-        auto i22 = slice_type{p.ra + half, p.rb, p.ca + half, p.cb};
+        auto half = (p.rb + p.ra) / 2;
+        auto flah = (p.rb + p.ra) / 2 + 1;
+        auto i11 = slice_type{p.ra, half, p.ca, half};
+        auto i12 = slice_type{p.ra, half, flah, p.cb};
+        auto i21 = slice_type{flah, p.rb, p.ca, half};
+        auto i22 = slice_type{flah, p.rb, flah, p.cb};
         subproblems.emplace_back(i11, i11);
         subproblems.emplace_back(i12, i21);
         subproblems.emplace_back(i11, i12);
@@ -131,9 +135,9 @@ void BM_matrix_multiply(benchmark::State &state) {
         assert(solutions.size() == 8);
         size_t n = solutions[0]->size();
         auto c = std::make_shared<std::vector<std::vector<int>>>(n * 2, std::vector<int>(n * 2));
-        sum_square_matrices(*c, 0, 0, *(solutions[0]), *(solutions[1]));     // C11
-        sum_square_matrices(*c, 0, n - 1, *(solutions[2]), *(solutions[3]));   // C12
-        sum_square_matrices(*c, n - 1, 0, *(solutions[4]), *(solutions[5]));   // C21
+        sum_square_matrices(*c, 0, 0, *(solutions[0]), *(solutions[1]));         // C11
+        sum_square_matrices(*c, 0, n - 1, *(solutions[2]), *(solutions[3]));     // C12
+        sum_square_matrices(*c, n - 1, 0, *(solutions[4]), *(solutions[5]));     // C21
         sum_square_matrices(*c, n - 1, n - 1, *(solutions[6]), *(solutions[7])); // C22
         return c;
     };
@@ -141,7 +145,7 @@ void BM_matrix_multiply(benchmark::State &state) {
     unsigned int par_degree = state.range(0);
 
     std::vector<int> copy = array;
-    slice_type p = {0, result.size(), 0, result[0].size()};
+    slice_type p = {0, result.size() - 1, 0, result[0].size() - 1};
     pair_of_slice problem = std::make_pair(p, p);
     dc_type divideAndConquer(is_base, divide, conquer, combine, par_degree);
 
