@@ -9,12 +9,13 @@
 
 using namespace std::chrono;
 
-using matrix_type = std::vector<std::vector<int>>;
 std::vector<int> array(DATA_SQRT * DATA_SQRT);
 matrix_type matrix_a(DATA_SQRT, std::vector<int>(DATA_SQRT));
 matrix_type matrix_b(DATA_SQRT, std::vector<int>(DATA_SQRT));
 
 void BM_merge_sort(benchmark::State &state);
+
+void BM_merge_sort_openmp(benchmark::State &state);
 
 void BM_matrix_multiply(benchmark::State &state);
 
@@ -35,6 +36,7 @@ int main(int argc, char **argv) {
     BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_merge_sort)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
     BENCHMARK(BM_matrix_multiply)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_merge_sort_openmp)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
 
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
@@ -87,14 +89,13 @@ void BM_merge_sort(benchmark::State &state) {
     }
 }
 
-template<typename T>
-void merge_sort(std::vector<T> &array) {
-    if (array.size() > 1) {
-        std::vector<T> array1(array.begin(), array.begin() + array.size() / 2);
-        merge_sort(array1);
-        std::vector<T> array2(array.begin() + array.size() / 2, array.end());
-        merge_sort(array2);
-        std::merge(array1.begin(), array1.end(), array2.begin(), array2.end(), array.begin());
+template<class Iter>
+void merge_sort(const Iter &first, const Iter &last) {
+    if (last - first > 1) {
+        Iter middle = first + (last - first) / 2;
+        merge_sort(first, middle);
+        merge_sort(middle, last);
+        std::inplace_merge(first, middle, last);
     }
 }
 
@@ -102,7 +103,34 @@ void BM_merge_sort_sequential(benchmark::State &state) {
     std::vector<int> copy = array;
     for (auto _ : state) {
         auto t1 = high_resolution_clock::now();
-        merge_sort(copy);
+        merge_sort(copy.begin(), copy.end());
+        auto t2 = high_resolution_clock::now();
+        auto time_span = duration_cast<duration<double>>(t2 - t1);
+        state.SetIterationTime(time_span.count());
+    }
+}
+
+template<class Iter>
+void merge_sort_openmp(Iter first, Iter last) {
+    if (last - first > 1) {
+        Iter middle = first + (last - first) / 2;
+#pragma omp task
+        merge_sort(first, middle);
+#pragma omp task
+        merge_sort(middle, last);
+#pragma omp taskwait
+        std::inplace_merge(first, middle, last);
+    }
+}
+
+void BM_merge_sort_openmp(benchmark::State &state) {
+    std::vector<int> copy = array;
+    unsigned int par_degree = state.range(0);
+    for (auto _ : state) {
+        auto t1 = high_resolution_clock::now();
+#pragma omp parallel num_threads(par_degree)
+#pragma omp single
+        merge_sort_openmp(copy.begin(), copy.end());
         auto t2 = high_resolution_clock::now();
         auto time_span = duration_cast<duration<double>>(t2 - t1);
         state.SetIterationTime(time_span.count());
