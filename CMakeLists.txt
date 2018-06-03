@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.10)
 project(SPM_Divide_and_Conquer)
 
 set(CMAKE_CXX_STANDARD 14)
+message("CMAKE_BUILD_TYPE is ${CMAKE_BUILD_TYPE}")
+message("CMAKE_CXX_FLAGS_DEBUG is ${CMAKE_CXX_FLAGS_DEBUG}")
+message("CMAKE_CXX_FLAGS_RELEASE is ${CMAKE_CXX_FLAGS_RELEASE}")
+
+# Uncomment the following two lines to output the optimisation report
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopt-info")
+#set(CMAKE_VERBOSE_MAKEFILE ON)
 
 # OpenMP
 find_package(OpenMP)
@@ -21,5 +28,7 @@ set(BUILD_TESTS OFF CACHE BOOL "Skip FastFlow tests")
 set(BUILD_EXAMPLES OFF CACHE BOOL "Skip FastFlow examples")
 include_directories(lib/fastflow)
 
-add_executable("${PROJECT_NAME}" main.cpp include/divideandconquer.h include/workstealingpool.h include/simplepool.h)
-target_link_libraries("${PROJECT_NAME}" benchmark)
+# Benchmarks
+set(EXE_NAME divide_and_conquer_benchmark)
+add_executable("${EXE_NAME}" main.cpp include/divideandconquer.h include/workstealingpool.h include/simplepool.h)
+target_link_libraries("${EXE_NAME}" benchmark)
