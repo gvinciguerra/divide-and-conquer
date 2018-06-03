@@ -23,7 +23,7 @@ void BM_merge_sort_openmp(benchmark::State &state);
 
 void BM_matrix_multiply(benchmark::State &state);
 
-void BM_merge_sort_sequential(benchmark::State &state);
+void BM_sort_sequential(benchmark::State &state);
 
 void BM_matrix_multiply_sequential(benchmark::State &state);
 
@@ -47,7 +47,9 @@ int main(int argc, char **argv) {
     for (auto it1 = matrix_b.begin1(); it1 != matrix_b.end1(); ++it1)
         std::generate(it1.begin(), it1.end(), std::rand);
 
-    BENCHMARK(BM_merge_sort_sequential)->Iterations(1)->UseManualTime();
+    // DON'T put a sequential benchmark before or after a parallel benchmark, otherwise the cache warming makes the
+    // comparison unfair
+    BENCHMARK(BM_sort_sequential)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_merge_sort)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
     BENCHMARK(BM_matrix_multiply)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
@@ -97,7 +99,7 @@ void BM_merge_sort(benchmark::State &state) {
     for (auto _ : state) {
         auto t1 = high_resolution_clock::now();
         divideAndConquer.solve(problem).get();
-        // assert(std::is_sorted(array.begin(), array.end()));
+        //assert(std::is_sorted(copy.begin(), copy.end()));
         auto t2 = high_resolution_clock::now();
         auto time_span = duration_cast<duration<double>>(t2 - t1);
         state.SetIterationTime(time_span.count());
@@ -114,11 +116,11 @@ void merge_sort(const Iter &first, const Iter &last) {
     }
 }
 
-void BM_merge_sort_sequential(benchmark::State &state) {
+void BM_sort_sequential(benchmark::State &state) {
     std::vector<int> copy = array;
     for (auto _ : state) {
         auto t1 = high_resolution_clock::now();
-        merge_sort(copy.begin(), copy.end());
+        std::sort(copy.begin(), copy.end());
         auto t2 = high_resolution_clock::now();
         auto time_span = duration_cast<duration<double>>(t2 - t1);
         state.SetIterationTime(time_span.count());
@@ -127,15 +129,16 @@ void BM_merge_sort_sequential(benchmark::State &state) {
 
 template<class Iter>
 void merge_sort_openmp(Iter first, Iter last) {
-    if (last - first > 1) {
-        Iter middle = first + (last - first) / 2;
+    if (last - first < CUTOFF_SQRT * CUTOFF_SQRT)
+        return std::sort(first, last);
+
+    Iter middle = first + (last - first) / 2;
 #pragma omp task
-        merge_sort(first, middle);
+    merge_sort(first, middle);
 #pragma omp task
-        merge_sort(middle, last);
+    merge_sort(middle, last);
 #pragma omp taskwait
-        std::inplace_merge(first, middle, last);
-    }
+    std::inplace_merge(first, middle, last);
 }
 
 void BM_merge_sort_openmp(benchmark::State &state) {
