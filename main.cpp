@@ -134,9 +134,9 @@ void merge_sort_openmp(Iter first, Iter last) {
 
     Iter middle = first + (last - first) / 2;
 #pragma omp task
-    merge_sort(first, middle);
+    merge_sort_openmp(first, middle);
 #pragma omp task
-    merge_sort(middle, last);
+    merge_sort_openmp(middle, last);
 #pragma omp taskwait
     std::inplace_merge(first, middle, last);
 }
