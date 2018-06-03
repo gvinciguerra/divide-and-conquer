@@ -102,7 +102,7 @@ std::future<typename std::result_of<F(Args...)>::type>
 WorkStealingPool::submit(F &&f, Args &&... args) {
     auto thread_id = std::this_thread::get_id();
     if (workers_map.find(thread_id) == workers_map.end()) {
-        auto r = std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
+        auto r = workers.size() == 1 ? 0 : std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
         return workers[r]->submit(f, args...);
     }
     return workers_map[thread_id]->submit(f, args...);
