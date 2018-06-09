@@ -8,11 +8,19 @@
 #include <vector>
 #include <functional>
 #include <thread>
+#include <ff/lb.hpp>
+#include <ff/node.hpp>
+#include <ff/farm.hpp>
+#include <ff/barrier.hpp>
+#include <iostream>
 #include "simplepool.h"
 #include "workstealingpool.h"
 
+template<typename TypeIn, typename TypeOut, bool FastFlowBackend = false>
+class DivideAndConquer;
+
 template<typename TypeIn, typename TypeOut>
-class DivideAndConquer {
+class DivideAndConquer<TypeIn, TypeOut, false> {
 public:
     using is_base_fun_type = std::function<bool(TypeIn &problem)>;
     using divide_fun_type = std::function<std::vector<TypeIn>(TypeIn &problem)>;
@@ -26,6 +34,25 @@ private:
     const combine_fun_type &combine;
     const size_t parallelism_degree;
     WorkStealingPool pool;
+
+    TypeOut solve_helper(TypeIn &problem, size_t remaining_workers) {
+        if (is_base(problem))
+            return conquer(problem);
+        if (remaining_workers <= 1)
+            return solve_sequential(problem);
+
+        std::vector<TypeIn> subproblems = divide(problem);
+        std::vector<std::future<TypeOut>> futures;
+        size_t child_workers = remaining_workers / subproblems.size();
+        for (auto it = subproblems.begin() + 1; it != subproblems.end(); ++it)
+            futures.emplace_back(pool.submit(&DivideAndConquer::solve_helper, this, *it, child_workers));
+
+        std::vector<TypeOut> solutions = {solve_helper(subproblems[0], child_workers)};
+        for (auto &f : futures)
+            solutions.emplace_back(f.get());
+
+        return combine(solutions);
+    }
 
 public:
     DivideAndConquer(const is_base_fun_type &is_base_fun,
@@ -52,6 +79,48 @@ public:
         return combine(solutions);
     }
 
+    std::future<TypeOut> solve(TypeIn &problem) {
+        return std::move(pool.submit(&DivideAndConquer::solve_helper, this, problem, parallelism_degree));
+    }
+};
+
+template<typename TypeIn, typename TypeOut>
+class DivideAndConquer<TypeIn, TypeOut, true> {
+public:
+    using is_base_fun_type = std::function<bool(TypeIn &problem)>;
+    using divide_fun_type = std::function<std::vector<TypeIn>(TypeIn &problem)>;
+    using conquer_fun_type = std::function<TypeOut(TypeIn &problem)>;
+    using combine_fun_type = std::function<TypeOut(std::vector<TypeOut> &solutions)>;
+
+private:
+    using job_type = struct {
+        DivideAndConquer *dc;
+        TypeIn problem;
+        size_t workers;
+        ff::Barrier *barrier;
+        std::vector<TypeOut> *out_vector;
+        std::mutex *mutex;
+    };
+
+    const is_base_fun_type &is_base;
+    const divide_fun_type &divide;
+    const conquer_fun_type &conquer;
+    const combine_fun_type &combine;
+    const size_t parallelism_degree;
+    std::unique_ptr<ff::ff_Farm<job_type, void>> farm;
+
+
+    struct Worker : ff::ff_node_t<job_type, void> {
+        void *svc(job_type *job) {
+            auto result = job->dc->solve_helper(job->problem, job->workers);
+            job->mutex->lock();
+            job->out_vector->push_back(result);
+            job->mutex->unlock();
+            job->barrier->incCounter();
+            delete job;
+        };
+    };
+
     TypeOut solve_helper(TypeIn &problem, size_t remaining_workers) {
         if (is_base(problem))
             return conquer(problem);
@@ -59,20 +128,67 @@ public:
             return solve_sequential(problem);
 
         std::vector<TypeIn> subproblems = divide(problem);
-        std::vector<std::future<TypeOut>> futures;
+        std::vector<TypeOut> solutions;
         size_t child_workers = remaining_workers / subproblems.size();
-        for (auto it = subproblems.begin() + 1; it != subproblems.end(); ++it)
-            futures.emplace_back(pool.submit(&DivideAndConquer::solve_helper, this, *it, child_workers));
+        std::mutex mutex;
+        ff::Barrier barrier;
+        barrier.barrierSetup(subproblems.size() - 1);
 
-        std::vector<TypeOut> solutions = {solve_helper(subproblems[0], child_workers)};
-        for (auto &f : futures)
-            solutions.emplace_back(f.get());
+        for (auto it = subproblems.begin() + 1; it != subproblems.end(); ++it) {
+            auto job = new job_type({this, *it, child_workers, &barrier, &solutions, &mutex});
+            farm->offload(job);
+        }
+
+        auto r = solve_helper(subproblems[0], child_workers);
+        mutex.lock();
+        solutions.push_back(r);
+        mutex.unlock();
+        barrier.doBarrier(0);
+        while (solutions.size() != subproblems.size());  // Fix barrier for macOS
+
+        return combine(solutions);
+    }
+
+public:
+    DivideAndConquer(const is_base_fun_type &is_base_fun,
+                     const divide_fun_type &divide_fun,
+                     const conquer_fun_type &conquer_fun,
+                     const combine_fun_type &combine_fun,
+                     unsigned int parallelism_degree = std::thread::hardware_concurrency())
+            : is_base(is_base_fun), divide(divide_fun), conquer(conquer_fun), combine(combine_fun),
+              parallelism_degree(parallelism_degree) {
+        if (parallelism_degree < 1)
+            throw std::invalid_argument("parallelism_degree < 1");
+
+        std::vector<std::unique_ptr<ff::ff_node>> workers;
+        for (size_t i = 0; i < parallelism_degree; ++i)
+            workers.push_back(std::make_unique<Worker>());
+
+        farm = std::make_unique<ff::ff_Farm<job_type, void>>(std::move(workers), true);
+        farm->remove_collector();
+    }
+
+    TypeOut solve_sequential(TypeIn &problem) {
+        if (is_base(problem))
+            return conquer(problem);
+
+        std::vector<TypeIn> subproblems = divide(problem);
+        std::vector<TypeOut> solutions;
+        solutions.reserve(subproblems.size());
+        for (auto &p : subproblems)
+            solutions.push_back(solve_sequential(p));
 
         return combine(solutions);
     }
 
     std::future<TypeOut> solve(TypeIn &problem) {
-        return std::move(std::async([this, &problem]() { return solve_helper(problem, parallelism_degree); }));
+        auto f = std::async([this, &problem]() {
+            farm->run();
+            auto r = solve_helper(problem, parallelism_degree);
+            farm->offload(EOS);
+            return r;
+        });
+        return std::move(f);
     }
 };
 
