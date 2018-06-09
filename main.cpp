@@ -55,8 +55,8 @@ int main(int argc, char **argv) {
 
     // DON'T put a sequential benchmark before or after a parallel benchmark, otherwise the cache warming makes the
     // comparison unfair
-//    BENCHMARK(BM_sort_sequential)->Iterations(1)->UseManualTime();
-//    BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_sort_sequential)->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_merge_sort)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_matrix_multiply)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
     BENCHMARK(BM_merge_sort_openmp)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
