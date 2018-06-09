@@ -17,29 +17,33 @@ std::vector<int> array(DATA_SQRT * DATA_SQRT);
 matrix<int> matrix_a(DATA_SQRT, DATA_SQRT);
 matrix<int> matrix_b(DATA_SQRT, DATA_SQRT);
 
-void BM_merge_sort(benchmark::State &state);
+void BM_sort_sequential(benchmark::State &state);
 
 void BM_merge_sort_openmp(benchmark::State &state);
 
-void BM_matrix_multiply(benchmark::State &state);
-
-void BM_sort_sequential(benchmark::State &state);
-
 void BM_matrix_multiply_sequential(benchmark::State &state);
+
+template<bool UseFastFlow = false>
+void BM_merge_sort(benchmark::State &state);
+
+template<bool UseFastFlow = false>
+void BM_matrix_multiply(benchmark::State &state);
 
 int main(int argc, char **argv) {
 //    DivideAndConquer<int, int, true> divideAndConquer(
-//            [] (int n) { return n < 3; },
+//            [] (int n) { return n <= 2; },
 //            [] (int n) { return std::vector<int> {n-1, n-2}; },
 //            [] (int n) { return 1; },
-//            [] (std::vector<int> v) { return v[0] + v[1]; });
+//            [] (std::vector<int> &v) { return v[0] + v[1]; });
 //
 //
-//    auto f = divideAndConquer.solve(10);
+//    auto p = 11;
+//    auto f = divideAndConquer.solve(p);
 //    f.wait();
+//    std::cout << divideAndConquer.solve_sequential(p) << " vs " << f.get();
 //    return 0;
 
-    std::uniform_int_distribution<int> dist(0, array.size() * 2);
+    std::uniform_int_distribution<int> dist(0, static_cast<int>(array.size() * 2));
     std::srand(0); // reproducibility
     std::generate(array.begin(), array.end(), std::rand);
     for (auto it1 = matrix_a.begin1(); it1 != matrix_a.end1(); ++it1)
@@ -47,13 +51,18 @@ int main(int argc, char **argv) {
     for (auto it1 = matrix_b.begin1(); it1 != matrix_b.end1(); ++it1)
         std::generate(it1.begin(), it1.end(), std::rand);
 
+    int64_t concurrency = std::thread::hardware_concurrency();
+
     // DON'T put a sequential benchmark before or after a parallel benchmark, otherwise the cache warming makes the
     // comparison unfair
-    BENCHMARK(BM_sort_sequential)->Iterations(1)->UseManualTime();
-    BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
-    BENCHMARK(BM_merge_sort)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
-    BENCHMARK(BM_matrix_multiply)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
-    BENCHMARK(BM_merge_sort_openmp)->DenseRange(1, std::thread::hardware_concurrency())->Iterations(1)->UseManualTime();
+//    BENCHMARK(BM_sort_sequential)->Iterations(1)->UseManualTime();
+//    BENCHMARK(BM_matrix_multiply_sequential)->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_merge_sort)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_matrix_multiply)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
+    BENCHMARK(BM_merge_sort_openmp)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
+    BENCHMARK_TEMPLATE(BM_matrix_multiply, true)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
+    BENCHMARK_TEMPLATE(BM_merge_sort, true)->DenseRange(1, concurrency)->Iterations(1)->UseManualTime();
+
 
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
@@ -64,15 +73,16 @@ int main(int argc, char **argv) {
  * MERGE SORT BENCHMARKS
  */
 
+template<bool UseFastFlow = false>
 void BM_merge_sort(benchmark::State &state) {
     using bounds_type = std::pair<std::vector<int>::iterator, std::vector<int>::iterator>;
-    using merge_sort_dc_type = DivideAndConquer<bounds_type, bounds_type>;
+    using merge_sort_dc_type = DivideAndConquer<bounds_type, bounds_type, UseFastFlow>;
 
-    merge_sort_dc_type::is_base_fun_type is_base = [](bounds_type &problem) -> bool {
+    typename merge_sort_dc_type::is_base_fun_type is_base = [](bounds_type &problem) -> bool {
         return std::distance(problem.first, problem.second) < CUTOFF_SQRT * CUTOFF_SQRT;
     };
 
-    merge_sort_dc_type::divide_fun_type divide = [](bounds_type &problem) -> std::vector<bounds_type> {
+    typename merge_sort_dc_type::divide_fun_type divide = [](bounds_type &problem) -> std::vector<bounds_type> {
         auto mid = problem.first + std::distance(problem.first, problem.second) / 2;
         std::vector<bounds_type> subproblems;
         subproblems.reserve(2);
@@ -81,25 +91,25 @@ void BM_merge_sort(benchmark::State &state) {
         return subproblems;
     };
 
-    merge_sort_dc_type::conquer_fun_type conquer = [](bounds_type &problem) -> bounds_type {
+    typename merge_sort_dc_type::conquer_fun_type conquer = [](bounds_type &problem) -> bounds_type {
         std::sort(problem.first, problem.second);
         return problem;
     };
 
-    merge_sort_dc_type::combine_fun_type combine = [](std::vector<bounds_type> &solutions) -> bounds_type {
+    typename merge_sort_dc_type::combine_fun_type combine = [](std::vector<bounds_type> &solutions) -> bounds_type {
         std::inplace_merge(solutions[0].first, solutions[0].second, solutions[1].second);
         return std::make_pair(solutions[0].first, solutions[1].second);
     };
 
-    unsigned int par_degree = state.range(0);
+    auto par_degree = static_cast<unsigned int>(state.range(0));
     std::vector<int> copy = array;
     bounds_type problem = {copy.begin(), copy.end()};
-    DivideAndConquer<bounds_type, bounds_type> divideAndConquer(is_base, divide, conquer, combine, par_degree);
+    merge_sort_dc_type divideAndConquer(is_base, divide, conquer, combine, par_degree);
 
     for (auto _ : state) {
         auto t1 = high_resolution_clock::now();
         divideAndConquer.solve(problem).get();
-        //assert(std::is_sorted(copy.begin(), copy.end()));
+//        assert(std::is_sorted(copy.begin(), copy.end()));
         auto t2 = high_resolution_clock::now();
         auto time_span = duration_cast<duration<double>>(t2 - t1);
         state.SetIterationTime(time_span.count());
@@ -143,7 +153,7 @@ void merge_sort_openmp(Iter first, Iter last) {
 
 void BM_merge_sort_openmp(benchmark::State &state) {
     std::vector<int> copy = array;
-    unsigned int par_degree = state.range(0);
+    auto par_degree = static_cast<unsigned int>(state.range(0));
     for (auto _ : state) {
         auto t1 = high_resolution_clock::now();
 #pragma omp parallel num_threads(par_degree)
@@ -159,6 +169,7 @@ void BM_merge_sort_openmp(benchmark::State &state) {
  * MATRIX MULTIPLICATION BENCHMARKS
  */
 
+template<bool UseFastFlow = false>
 void BM_matrix_multiply(benchmark::State &state) {
     auto n = matrix_a.size1();
     assert(n == (n & (n - 1)) == 0); // n must be a power of two, because the algorithm doesn't do row/col padding
@@ -167,15 +178,15 @@ void BM_matrix_multiply(benchmark::State &state) {
         size_t ra, rb, ca, cb;
     };
     using pair_of_slice = std::pair<slice_type, slice_type>;
-    using matrix_mult_dc_type = DivideAndConquer<pair_of_slice, std::shared_ptr<matrix<int>>>;
+    using matrix_mult_dc_type = DivideAndConquer<pair_of_slice, std::shared_ptr<matrix<int>>, UseFastFlow>;
 
     std::vector<std::vector<int>> result(DATA_SQRT, std::vector<int>(DATA_SQRT));
 
-    matrix_mult_dc_type::is_base_fun_type is_base = [](pair_of_slice &p) -> bool {
+    typename matrix_mult_dc_type::is_base_fun_type is_base = [](pair_of_slice &p) -> bool {
         return p.first.rb - p.first.ra <= CUTOFF_SQRT;
     };
 
-    matrix_mult_dc_type::divide_fun_type divide = [](pair_of_slice &problem) {
+    typename matrix_mult_dc_type::divide_fun_type divide = [](pair_of_slice &problem) {
         std::vector<pair_of_slice> subproblems;
         auto p = problem.first;
         auto half = (p.rb - p.ra + 1) / 2 - 1;
@@ -195,13 +206,13 @@ void BM_matrix_multiply(benchmark::State &state) {
         return subproblems;
     };
 
-    matrix_mult_dc_type::conquer_fun_type conquer = [&result](pair_of_slice &p) {
+    typename matrix_mult_dc_type::conquer_fun_type conquer = [&result](pair_of_slice &p) {
         matrix_range<matrix<int>> sub_a(matrix_a, range(p.first.ra, p.first.rb), range(p.first.ca, p.first.cb));
         matrix_range<matrix<int>> sub_b(matrix_a, range(p.second.ra, p.second.rb), range(p.second.ca, p.second.cb));
         return std::make_shared<matrix<int>>(block_prod<matrix<int>, 64>(sub_a, sub_b));
     };
 
-    matrix_mult_dc_type::combine_fun_type combine = [](std::vector<std::shared_ptr<matrix<int>>> &solutions) {
+    typename matrix_mult_dc_type::combine_fun_type combine = [](std::vector<std::shared_ptr<matrix<int>>> &solutions) {
         assert(solutions.size() == 8);
         size_t n = solutions[0]->size1() + 1;
         auto c = std::make_shared<matrix<int>>(n * 2, n * 2);
@@ -216,7 +227,7 @@ void BM_matrix_multiply(benchmark::State &state) {
         return c;
     };
 
-    unsigned int par_degree = state.range(0);
+    auto par_degree = static_cast<unsigned int>(state.range(0));
     slice_type p = {0, result.size() - 1, 0, result[0].size() - 1};
     pair_of_slice problem = std::make_pair(p, p);
     matrix_mult_dc_type divideAndConquer(is_base, divide, conquer, combine, par_degree);
