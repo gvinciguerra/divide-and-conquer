@@ -24,20 +24,20 @@ class DivideAndConquer<TypeIn, TypeOut, false> {
 public:
     using is_base_fun_type = std::function<bool(TypeIn &problem)>;
     using divide_fun_type = std::function<std::vector<TypeIn>(TypeIn &problem)>;
-    using conquer_fun_type = std::function<TypeOut(TypeIn &problem)>;
+    using base_fun_type = std::function<TypeOut(TypeIn &problem)>;
     using combine_fun_type = std::function<TypeOut(std::vector<TypeOut> &solutions)>;
 
 private:
     const is_base_fun_type &is_base;
     const divide_fun_type &divide;
-    const conquer_fun_type &conquer;
+    const base_fun_type &base;
     const combine_fun_type &combine;
     const size_t parallelism_degree;
     WorkStealingPool pool;
 
     TypeOut solve_helper(TypeIn &problem, size_t remaining_workers) {
         if (is_base(problem))
-            return conquer(problem);
+            return base(problem);
         if (remaining_workers <= 1)
             return solve_sequential(problem);
 
@@ -57,10 +57,10 @@ private:
 public:
     DivideAndConquer(const is_base_fun_type &is_base_fun,
                      const divide_fun_type &divide_fun,
-                     const conquer_fun_type &conquer_fun,
+                     const base_fun_type &base_fun,
                      const combine_fun_type &combine_fun,
                      unsigned int parallelism_degree = std::thread::hardware_concurrency())
-            : is_base(is_base_fun), divide(divide_fun), conquer(conquer_fun), combine(combine_fun),
+            : is_base(is_base_fun), divide(divide_fun), base(base_fun), combine(combine_fun),
               parallelism_degree(parallelism_degree), pool(parallelism_degree) {
         if (parallelism_degree < 1)
             throw std::invalid_argument("parallelism_degree < 1");
@@ -68,7 +68,7 @@ public:
 
     TypeOut solve_sequential(TypeIn &problem) {
         if (is_base(problem))
-            return conquer(problem);
+            return base(problem);
 
         std::vector<TypeIn> subproblems = divide(problem);
         std::vector<TypeOut> solutions;
@@ -89,7 +89,7 @@ class DivideAndConquer<TypeIn, TypeOut, true> {
 public:
     using is_base_fun_type = std::function<bool(TypeIn &problem)>;
     using divide_fun_type = std::function<std::vector<TypeIn>(TypeIn &problem)>;
-    using conquer_fun_type = std::function<TypeOut(TypeIn &problem)>;
+    using base_fun_type = std::function<TypeOut(TypeIn &problem)>;
     using combine_fun_type = std::function<TypeOut(std::vector<TypeOut> &solutions)>;
 
 private:
@@ -103,7 +103,7 @@ private:
 
     const is_base_fun_type &is_base;
     const divide_fun_type &divide;
-    const conquer_fun_type &conquer;
+    const base_fun_type &base;
     const combine_fun_type &combine;
     const size_t parallelism_degree;
     std::unique_ptr<ff::ff_Farm<job_type, void>> farm;
@@ -129,7 +129,7 @@ private:
 
         TypeOut solve_helper(TypeIn &problem, size_t remaining_workers) {
             if (dc->is_base(problem))
-                return dc->conquer(problem);
+                return dc->base(problem);
             if (remaining_workers <= 1)
                 return dc->solve_sequential(problem);
 
@@ -161,10 +161,10 @@ private:
 public:
     DivideAndConquer(const is_base_fun_type &is_base_fun,
                      const divide_fun_type &divide_fun,
-                     const conquer_fun_type &conquer_fun,
+                     const base_fun_type &base_fun,
                      const combine_fun_type &combine_fun,
                      unsigned int parallelism_degree = std::thread::hardware_concurrency())
-            : is_base(is_base_fun), divide(divide_fun), conquer(conquer_fun), combine(combine_fun),
+            : is_base(is_base_fun), divide(divide_fun), base(base_fun), combine(combine_fun),
               parallelism_degree(parallelism_degree) {
         if (parallelism_degree < 1)
             throw std::invalid_argument("parallelism_degree < 1");
@@ -179,7 +179,7 @@ public:
 
     TypeOut solve_sequential(TypeIn &problem) {
         if (is_base(problem))
-            return conquer(problem);
+            return base(problem);
 
         std::vector<TypeIn> subproblems = divide(problem);
         std::vector<TypeOut> solutions;
