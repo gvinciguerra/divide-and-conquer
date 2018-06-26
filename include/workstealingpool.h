@@ -12,9 +12,6 @@
 #include <set>
 #include <unordered_map>
 
-using namespace std::chrono_literals;
-
-
 class WorkStealingPool {
     class Worker {
     public:
@@ -52,6 +49,13 @@ private:
     std::unordered_map<std::thread::id, std::shared_ptr<Worker>> workers_map; // O(1) access in submit()
 };
 
+int fast_rand() {
+    static int seed = std::rand();
+    seed = (214013 * seed + 2531011);
+    return (seed >> 16) & 0x7FFF;
+}
+
+
 template<class F, class... Args>
 std::future<typename std::result_of<F(Args...)>::type> WorkStealingPool::Worker::submit(F &&f, Args &&... args) {
     using result_type = typename std::result_of<F(Args...)>::type;
@@ -63,7 +67,7 @@ std::future<typename std::result_of<F(Args...)>::type> WorkStealingPool::Worker:
     queue.emplace_front([task]() { (*task)(); });
     pool.remaining++;
     lock.unlock();
-    cond.notify_all();
+    cond.notify_one();
 
     return task->get_future();
 }
@@ -74,26 +78,47 @@ WorkStealingPool::Worker::Worker(WorkStealingPool &pool) : pool(pool) {
 
 void WorkStealingPool::Worker::start() {
     thread = std::thread([this]() -> void {
+        constexpr size_t backoff_min = 1 << 4;
+        constexpr size_t backoff_max = 1 << 10;
+        static thread_local size_t backoff = backoff_min;
+//        static double avg_time = 0;
+
         while (true) {
-            std::unique_lock<std::mutex> lock(mutex);
-            cond.wait(lock, [this] { return pool.shutdown || !queue.empty() || pool.remaining >= 0; });
             if (pool.shutdown && queue.empty())
-                return;
+                break;
             if (queue.empty()) {
-                lock.unlock();
                 auto stolen_task = std::move(pool.steal());
                 if (stolen_task != nullptr) {
                     pool.remaining--;
+                    backoff = backoff_min;
                     stolen_task();
+                } else {
+                    for (volatile unsigned i = 0; i < backoff; ++i);
+                    if (backoff < backoff_max)
+                        backoff <<= 1;
                 }
             } else {
-                auto task = std::move(queue.back());
-                queue.pop_back();
-                lock.unlock();
-                pool.remaining--;
+//                static long count = 0;
+//                auto t1 = std::chrono::high_resolution_clock::now();
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lock(mutex);
+                    cond.wait(lock, [this] { return pool.shutdown || !queue.empty() || pool.remaining >= 0; });
+                    if (queue.empty())
+                        continue;
+                    task = std::move(queue.back());
+                    pool.remaining--;
+                    queue.pop_back();
+                }
+//                auto t2 = std::chrono::high_resolution_clock::now();
+//                auto time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count();
+//                avg_time = (avg_time * count + time_span) / (count + 1);
+//                ++count;
+                backoff = backoff_min;
                 task();
             }
         }
+//        std::cout << "Avg. task retrieval time" << avg_time;
     });
 }
 
@@ -102,15 +127,17 @@ std::future<typename std::result_of<F(Args...)>::type>
 WorkStealingPool::submit(F &&f, Args &&... args) {
     auto thread_id = std::this_thread::get_id();
     if (workers_map.find(thread_id) == workers_map.end()) {
-        auto r = workers.size() == 1 ? 0 : std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
+        auto r = workers.size() == 1 ? 0 : fast_rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
         return workers[r]->submit(f, args...);
     }
     return workers_map[thread_id]->submit(f, args...);
 }
 
 std::function<void()> WorkStealingPool::steal() {
-    auto r = workers.size() == 1 ? 0 : std::rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
+    auto r = workers.size() == 1 ? 0 : fast_rand() / ((RAND_MAX + 1u) / (workers.size() - 1));
     auto victim = workers[r];
+    if (victim->queue.empty())
+        return nullptr; // reduce calls to try_lock
     std::unique_lock<std::mutex> lock(victim->mutex, std::try_to_lock);
     if (lock.owns_lock() && !victim->queue.empty()) {
         auto task = std::move(victim->queue.front());
